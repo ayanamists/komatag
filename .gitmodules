@@ -1,0 +1,3 @@
+[submodule "comicinfo"]
+	path = comicinfo
+	url = git@github.com:ayanamists/comicinfo.git

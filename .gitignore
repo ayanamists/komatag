@@ -1,0 +1,22 @@
+/target
+/result
+/result-*
+.direnv/
+.envrc.local
+
+# Nix flake lock is committed intentionally; ignore only the build outputs
+# created by `nix build`
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+__MACOSX/
+
+# Temporary files written by cxgen during injection
+.*.cxgen_tmp
