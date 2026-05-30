@@ -54,6 +54,9 @@ struct Subject {
     /// Structured wiki infobox entries.
     #[serde(default)]
     infobox: Vec<InfoboxItem>,
+    /// Whether this subject is a series (vs a single volume/episode).
+    #[serde(default)]
+    series: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -69,6 +72,23 @@ struct RatingBlock {
 struct InfoboxItem {
     key: String,
     value: Value,
+}
+
+// ---------------------------------------------------------------------------
+// Relation response types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RelatedSubject {
+    pub id: u64,
+    #[serde(rename = "type")]
+    pub subject_type: u8,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub name_cn: String,
+    #[serde(default)]
+    pub relation: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +112,13 @@ struct SearchResult {
     date: Option<String>,
     #[serde(rename = "type")]
     subject_type: u8,
+    /// `true` when this is the main entry of a book series (系列主条目),
+    /// as opposed to an individual 单行本 volume.
+    #[serde(default)]
+    series: bool,
+    /// Book platform, e.g. "漫画", "小说", "画集".
+    #[serde(default)]
+    platform: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -146,9 +173,7 @@ impl BangumiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().unwrap_or_default();
-            anyhow::bail!(
-                "Bangumi API returned HTTP {status} for subject {subject_id}:\n{body}"
-            );
+            anyhow::bail!("Bangumi API returned HTTP {status} for subject {subject_id}:\n{body}");
         }
 
         let subject: Subject = resp
@@ -156,6 +181,30 @@ impl BangumiClient {
             .with_context(|| format!("Failed to parse subject {subject_id} response"))?;
 
         Ok(subject_to_comic_info(subject))
+    }
+
+    /// Fetch related subjects for a given subject ID.
+    pub fn fetch_relations(&self, subject_id: u64) -> Result<Vec<RelatedSubject>> {
+        let url = format!("{}/v0/subjects/{}/subjects", BASE_URL, subject_id);
+
+        let resp = self
+            .request(reqwest::Method::GET, &url)
+            .send()
+            .with_context(|| format!("GET {url} failed"))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            anyhow::bail!(
+                "Bangumi API returned HTTP {status} for subject relations {subject_id}:\n{body}"
+            );
+        }
+
+        let relations: Vec<RelatedSubject> = resp
+            .json()
+            .with_context(|| format!("Failed to parse subject relations {subject_id} response"))?;
+
+        Ok(relations)
     }
 
     /// Search for subjects matching `keyword` (manga type = 1 by default).
@@ -186,9 +235,7 @@ impl BangumiClient {
             anyhow::bail!("Bangumi search returned HTTP {status}:\n{body_text}");
         }
 
-        let search_resp: SearchResponse = resp
-            .json()
-            .context("Failed to parse search response")?;
+        let search_resp: SearchResponse = resp.json().context("Failed to parse search response")?;
 
         let hits = search_resp
             .data
@@ -199,6 +246,8 @@ impl BangumiClient {
                 name_cn: r.name_cn,
                 date: r.date,
                 subject_type: r.subject_type,
+                series: r.series,
+                platform: r.platform,
             })
             .collect();
 
@@ -218,6 +267,10 @@ pub struct SearchHit {
     pub name_cn: String,
     pub date: Option<String>,
     pub subject_type: u8,
+    /// `true` when this is the main entry of a book series (系列主条目).
+    pub series: bool,
+    /// Book platform, e.g. "漫画", "小说", "画集".
+    pub platform: String,
 }
 
 impl std::fmt::Display for SearchHit {
@@ -232,7 +285,21 @@ impl std::fmt::Display for SearchHit {
             .as_deref()
             .map(|d| format!(" ({})", d))
             .unwrap_or_default();
-        write!(f, "[{}] {}{}{}", self.id, self.name, cn, date)
+        // Tag the series head and platform so a human (or LLM) picking an ID
+        // can tell the series entry apart from individual 单行本 volumes.
+        let mut tags = Vec::new();
+        if self.series {
+            tags.push("系列".to_owned());
+        }
+        if !self.platform.is_empty() {
+            tags.push(self.platform.clone());
+        }
+        let tag_str = if tags.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", tags.join(", "))
+        };
+        write!(f, "[{}] {}{}{}{}", self.id, self.name, cn, date, tag_str)
     }
 }
 
@@ -244,15 +311,17 @@ impl std::fmt::Display for SearchHit {
 fn subject_to_comic_info(s: Subject) -> ComicInfo {
     let mut ci = ComicInfo::default();
 
-    // Prefer Chinese name as series title when available
-    let series_name = if !s.name_cn.is_empty() {
+    // Prefer Chinese name as title when available
+    let title_name = if !s.name_cn.is_empty() {
         s.name_cn.clone()
     } else {
         s.name.clone()
     };
 
-    ci.series = Some(series_name.clone());
-    ci.title = Some(series_name);
+    if s.series {
+        ci.series = Some(title_name.clone());
+    }
+    ci.title = Some(title_name);
 
     if !s.summary.is_empty() {
         ci.summary = Some(s.summary);
@@ -363,8 +432,10 @@ fn apply_infobox(ci: &mut ComicInfo, infobox: &[InfoboxItem]) {
             // Colour / B&W
             "是否彩色" | "色彩" => {
                 if ci.black_and_white == YesNo::Unknown {
-                    ci.black_and_white = if text.contains("彩") || text.to_ascii_lowercase().contains("color") {
-                        YesNo::No  // "No" it is not B&W → it IS colour
+                    ci.black_and_white = if text.contains("彩")
+                        || text.to_ascii_lowercase().contains("color")
+                    {
+                        YesNo::No // "No" it is not B&W → it IS colour
                     } else if text.contains("黑白") || text.to_ascii_lowercase().contains("b&w") {
                         YesNo::Yes
                     } else {
@@ -494,6 +565,7 @@ mod tests {
             date: Some("1997-07-22".to_owned()),
             volumes: 105,
             rating: Some(RatingBlock { score: 9.0 }),
+            series: true,
             infobox: vec![
                 InfoboxItem {
                     key: "出版社".to_owned(),

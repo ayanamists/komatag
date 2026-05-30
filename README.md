@@ -35,16 +35,19 @@ The resulting XML conforms to the [ComicInfo v2.0 schema](comicinfo/schema/v2.0/
 
 ```sh
 # Print ComicInfo.xml to stdout (metadata inferred from filename)
-cxgen "My Series v02 #015 (2022) (Publisher).cbz"
+cxgen gen "My Series v02 #015 (2022) (Publisher).cbz"
 
 # Inject directly into a CBZ archive
-cxgen --inject "My Series v02 #015 (2022) (Publisher).cbz"
+cxgen gen --inject "My Series v02 #015 (2022) (Publisher).cbz"
 
 # Fetch rich metadata from Bangumi and inject
-cxgen --bangumi-id 12345 --inject "One Piece v01 (1997).cbz"
+cxgen gen --bangumi-id 12345 --inject "One Piece v01 (1997).cbz"
 
 # Write to a sidecar file (useful for .7z archives)
-cxgen -o ComicInfo.xml "archive.7z"
+cxgen gen -o ComicInfo.xml "archive.7z"
+
+# Search Bangumi for a subject ID (no archive needed)
+cxgen search "進撃の巨人"
 ```
 
 ---
@@ -94,42 +97,53 @@ Rust TLS), and both `zip` and `sevenz-rust` are pure-Rust implementations.
 # ── Output ──────────────────────────────────────────────────────────────────
 
 # Print XML to stdout
-cxgen archive.cbz
+cxgen gen archive.cbz
 
 # Write to a file
-cxgen -o ComicInfo.xml archive.cbz
+cxgen gen -o ComicInfo.xml archive.cbz
 
 # Inject into a ZIP/CBZ archive (creates a temp file, then replaces original)
-cxgen --inject archive.cbz
+cxgen gen --inject archive.cbz
 
 # Inject and overwrite an existing ComicInfo.xml
-cxgen --inject --force archive.cbz
+cxgen gen --inject --force archive.cbz
 
 # ── Metadata overrides ───────────────────────────────────────────────────────
 
-cxgen --series "One Piece" --number 1 --volume 1 \
+cxgen gen --series "One Piece" --number 1 --volume 1 \
       --publisher "Shueisha" --language ja \
       --manga yes-rtl --inject archive.cbz
 
 # ── Bangumi ──────────────────────────────────────────────────────────────────
 
 # Search for a title (prints IDs, does not generate XML)
-cxgen --bangumi-search "ワンピース" archive.cbz
+cxgen search "ワンピース"
 
 # Fetch by ID and merge with filename-parsed data
-cxgen --bangumi-id 950 --inject archive.cbz
+cxgen gen --bangumi-id 950 --inject archive.cbz
+
+# Let cxgen pick the best match automatically (prefers the series head)
+cxgen gen --bangumi-auto --inject archive.cbz
 
 # Use an access token for higher rate limits / NSFW subjects
-BANGUMI_TOKEN=your_token cxgen --bangumi-id 950 --inject archive.cbz
+BANGUMI_TOKEN=your_token cxgen gen --bangumi-id 950 --inject archive.cbz
 ```
 
 ### All options
 
 ```
-Usage: cxgen [OPTIONS] <FILE>
+Usage: cxgen <COMMAND>
+
+Commands:
+  gen     Generate ComicInfo.xml for an archive or a directory of archives
+  search  Search Bangumi and print matching subjects
+
+────────────────────────────────────────────────────────────────────────────
+
+Usage: cxgen gen [OPTIONS] <FILE_OR_DIR>
 
 Arguments:
-  <FILE>  Comic archive file to process (.zip, .cbz, .7z)
+  <FILE_OR_DIR>  Comic archive or directory of archives (.zip, .cbz, .7z)
 
 Output:
   -o, --output <FILE>      Write the generated XML to FILE instead of stdout
@@ -158,14 +172,28 @@ Metadata overrides:
       --genre <GENRE>              Genre (comma-separated)
 
 Bangumi:
+      --bangumi-auto               Search Bangumi with the parsed series name and use the
+                                     best match (prefers the series head over single volumes)
       --bangumi-id <ID>            Fetch metadata from Bangumi by subject ID
-      --bangumi-search <QUERY>     Search Bangumi and print matches (no XML generated)
       --bangumi-token <TOKEN>      Access token [env: BANGUMI_TOKEN]
-      --bangumi-type <TYPE>        Subject type filter for search [default: 1]
-                                     1=anime/manga, 2=book, 4=game
+      --bangumi-type <TYPE>        Subject type filter [default: 1]
+                                     1=book/manga, 2=anime, 3=music, 4=game, 6=real
 
   -h, --help                       Print help
   -V, --version                    Print version
+
+────────────────────────────────────────────────────────────────────────────
+
+Usage: cxgen search [OPTIONS] <QUERY>
+
+Arguments:
+  <QUERY>  Title or keyword to search for
+
+Options:
+      --type <TYPE>      Subject type filter [default: 1]
+                           1=book/manga, 2=anime, 3=music, 4=game, 6=real
+      --token <TOKEN>    Access token [env: BANGUMI_TOKEN]
+  -h, --help             Print help
 ```
 
 ---
@@ -209,14 +237,14 @@ token out of your shell history) or the `--bangumi-token` flag.
 ### Workflow example
 
 ```sh
-# 1. Find the Bangumi subject ID
-cxgen --bangumi-search "进击的巨人" my_archive.cbz
-#   [400]  進撃の巨人 / 进击的巨人 (2009-09-09)
-#   [8431] 進撃の巨人 Before the Fall / ... (2011-08-09)
+# 1. Find the Bangumi subject ID ([系列] marks the series head)
+cxgen search "进击的巨人"
+#   [8491] 進撃の巨人 / 进击的巨人 (2010-03-17) [系列, 漫画]
+#   [63683] 進撃の巨人 Before the fall / ... (2011-12-02) [漫画]
 #   ...
 
 # 2. Fetch and inject
-cxgen --bangumi-id 400 --inject "Attack on Titan v01 (2009).cbz"
+cxgen gen --bangumi-id 8491 --inject "Attack on Titan v01 (2009).cbz"
 ```
 
 ---

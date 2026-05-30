@@ -41,7 +41,67 @@ pub fn parse_filename(path: &Path) -> FilenameMetadata {
         None => return FilenameMetadata::default(),
     };
 
-    parse_stem(&stem)
+    let mut meta = parse_stem(&stem);
+
+    // If series is missing, try to infer it from the parent directory
+    if meta.series.is_none() {
+        if let Some(parent) = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+        {
+            let mut brackets = Vec::new();
+            let mut start = None;
+            for (i, c) in parent.char_indices() {
+                if c == '[' || c == '【' {
+                    start = Some(i + c.len_utf8());
+                } else if c == ']' || c == '】' {
+                    if let Some(st) = start {
+                        let inner = parent[st..i].trim();
+                        if !inner.is_empty() {
+                            brackets.push(inner.to_string());
+                        }
+                        start = None;
+                    }
+                }
+            }
+
+            let mut core_parent = parent.to_string();
+            for b in &brackets {
+                core_parent = core_parent.replace(&format!("[{}]", b), "");
+                core_parent = core_parent.replace(&format!("【{}】", b), "");
+            }
+
+            let parent_meta = parse_stem(&core_parent);
+            if let Some(s) = parent_meta.series {
+                meta.series = Some(s);
+            } else if !brackets.is_empty() {
+                meta.series = Some(brackets[0].clone());
+            }
+
+            if meta.year.is_none() {
+                meta.year = parent_meta.year;
+            }
+            if meta.publisher.is_none() {
+                meta.publisher = parent_meta.publisher;
+            }
+
+            // Re-evaluate title
+            if let Some(ref series) = meta.series {
+                if meta.title.is_none() {
+                    if let Some(ref num) = meta.number {
+                        meta.title = Some(format!("{} #{}", series, num));
+                    } else if let Some(ref vol) = meta.volume {
+                        meta.title = Some(format!("{} v{}", series, vol));
+                    } else {
+                        meta.title = Some(series.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    meta
 }
 
 /// Parse a bare file stem string (no extension).
@@ -210,18 +270,8 @@ fn looks_like_misc(s: &str) -> bool {
     let lower = s.to_ascii_lowercase();
     matches!(
         lower.as_str(),
-        "digital"
-            | "hq"
-            | "scan"
-            | "scans"
-            | "webrip"
-            | "web"
-            | "cbz"
-            | "cbr"
-            | "epub"
-            | "pdf"
-    ) || lower.starts_with("v")
-        && lower[1..].chars().all(|c| c.is_ascii_digit())
+        "digital" | "hq" | "scan" | "scans" | "webrip" | "web" | "cbz" | "cbr" | "epub" | "pdf"
+    ) || lower.starts_with("v") && lower[1..].chars().all(|c| c.is_ascii_digit())
 }
 
 /// Extract volume from the core string.
@@ -234,13 +284,14 @@ fn extract_volume(s: &str) -> (String, Option<i32>) {
     //   \bv(\d+)\b                    – "v01", "v2"
     static RE_VOLUME_LONG: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     static RE_VOLUME_SHORT: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static RE_VOLUME_ZH: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
 
-    let re_long = RE_VOLUME_LONG
-        .get_or_init(|| Regex::new(r"(?i)\bvol(?:ume)?\.?\s*(\d+)\b").unwrap());
-    let re_short =
-        RE_VOLUME_SHORT.get_or_init(|| Regex::new(r"(?i)\bv(\d{1,4})\b").unwrap());
+    let re_long =
+        RE_VOLUME_LONG.get_or_init(|| Regex::new(r"(?i)\bvol(?:ume)?\.?\s*(\d+)\b").unwrap());
+    let re_short = RE_VOLUME_SHORT.get_or_init(|| Regex::new(r"(?i)\bv(\d{1,4})\b").unwrap());
+    let re_zh = RE_VOLUME_ZH.get_or_init(|| Regex::new(r"第\s*(\d+)\s*[卷册]").unwrap());
 
-    for re in [re_long, re_short] {
+    for re in [re_long, re_short, re_zh] {
         if let Some(cap) = re.captures(s) {
             if let Ok(vol) = cap[1].parse::<i32>() {
                 let cleaned = re.replace(s, "").trim().to_owned();
@@ -269,18 +320,20 @@ fn extract_issue_number(s: &str) -> (String, Option<String>) {
     static RE_NO: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     // Pattern 3: Chapter / Ch.
     static RE_CHAPTER: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    // Pattern 4: trailing digits (separated by space or dash)
+    // Pattern 4: Chinese Chapter / Issue
+    static RE_CHAPTER_ZH: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    // Pattern 5: trailing digits (separated by space or dash)
     static RE_TRAILING: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
 
     let re_hash = RE_HASH.get_or_init(|| Regex::new(r"#(\d+(?:\.\d+)?)").unwrap());
-    let re_no =
-        RE_NO.get_or_init(|| Regex::new(r"(?i)\bno\.?\s*(\d+(?:\.\d+)?)\b").unwrap());
+    let re_no = RE_NO.get_or_init(|| Regex::new(r"(?i)\bno\.?\s*(\d+(?:\.\d+)?)\b").unwrap());
     let re_chapter = RE_CHAPTER
         .get_or_init(|| Regex::new(r"(?i)\b(?:chapter|ch)\.?\s*(\d+(?:\.\d+)?)\b").unwrap());
-    let re_trailing =
-        RE_TRAILING.get_or_init(|| Regex::new(r"[\s\-]+(\d{1,4})$").unwrap());
+    let re_chapter_zh =
+        RE_CHAPTER_ZH.get_or_init(|| Regex::new(r"第\s*(\d+(?:\.\d+)?)\s*[话話章回期]").unwrap());
+    let re_trailing = RE_TRAILING.get_or_init(|| Regex::new(r"[\s\-]+(\d{1,4})$").unwrap());
 
-    for re in [re_hash, re_no, re_chapter, re_trailing] {
+    for re in [re_hash, re_no, re_chapter, re_chapter_zh, re_trailing] {
         if let Some(cap) = re.captures(s) {
             let num = cap[1].to_owned();
             let cleaned = re.replace(s, "").trim().to_owned();
@@ -380,6 +433,15 @@ mod tests {
     }
 
     #[test]
+    fn chinese_patterns() {
+        let m = parse("某某漫画 第02卷 第15.5话 (2023)");
+        assert_eq!(m.series.as_deref(), Some("某某漫画"));
+        assert_eq!(m.volume, Some(2));
+        assert_eq!(m.number.as_deref(), Some("15.5"));
+        assert_eq!(m.year, Some(2023));
+    }
+
+    #[test]
     fn title_generated_with_number() {
         let m = parse("Amazing Spider-Man #050 (1968)");
         assert_eq!(m.series.as_deref(), Some("Amazing Spider-Man"));
@@ -398,5 +460,24 @@ mod tests {
         assert_eq!(m.number.as_deref(), Some("003"));
         assert_eq!(m.year, Some(2021));
         assert_eq!(m.publisher.as_deref(), Some("Publisher"));
+    }
+
+    #[test]
+    fn path_input_parent_brackets() {
+        use std::path::PathBuf;
+        let p = PathBuf::from("/data/manga/[课长岛耕作][弘兼宪史][Vol.01-Vol.17]/Volume_01.cbz");
+        let m = parse_filename(&p);
+        assert_eq!(m.series.as_deref(), Some("课长岛耕作"));
+        assert_eq!(m.volume, Some(1));
+    }
+
+    #[test]
+    fn path_input_parent_core() {
+        use std::path::PathBuf;
+        let p = PathBuf::from("/comics/Manga Title (2021)/Volume_01.cbz");
+        let m = parse_filename(&p);
+        assert_eq!(m.series.as_deref(), Some("Manga Title"));
+        assert_eq!(m.volume, Some(1));
+        assert_eq!(m.year, Some(2021));
     }
 }
