@@ -346,6 +346,6 @@ fn tmp_path_for(path: &Path) -> PathBuf {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    let tmp_name = format!(".{}.cxgen_tmp", file_name);
+    let tmp_name = format!(".{}.komatag_tmp", file_name);
     path.with_file_name(tmp_name)
 }

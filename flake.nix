@@ -1,5 +1,5 @@
 {
-  description = "cxgen – CLI tool to generate ComicInfo.xml for comic archives";
+  description = "komatag – CLI tool to generate ComicInfo.xml for comic archives";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -54,7 +54,7 @@
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
         # The main package derivation.
-        cxgen = craneLib.buildPackage (commonArgs // {
+        komatag = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
         });
 
@@ -64,16 +64,16 @@
         # Packages
         # ------------------------------------------------------------------ #
         packages = {
-          default = cxgen;
-          inherit cxgen;
+          default = komatag;
+          inherit komatag;
         };
 
         # ------------------------------------------------------------------ #
         # Apps
         # ------------------------------------------------------------------ #
         apps.default = flake-utils.lib.mkApp {
-          drv = cxgen;
-          name = "cxgen";
+          drv = komatag;
+          name = "komatag";
         };
 
         # ------------------------------------------------------------------ #
@@ -81,19 +81,19 @@
         # ------------------------------------------------------------------ #
         checks = {
           # Build the package as a check
-          inherit cxgen;
+          inherit komatag;
 
           # Clippy
-          cxgen-clippy = craneLib.cargoClippy (commonArgs // {
+          komatag-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
           });
 
           # Formatting
-          cxgen-fmt = craneLib.cargoFmt { inherit src; };
+          komatag-fmt = craneLib.cargoFmt { inherit src; };
 
           # Unit tests
-          cxgen-test = craneLib.cargoTest (commonArgs // {
+          komatag-test = craneLib.cargoTest (commonArgs // {
             inherit cargoArtifacts;
           });
         };
@@ -119,7 +119,7 @@
           # it.  Set this in your shell profile or .envrc:
           #   export BANGUMI_TOKEN=your_token_here
           shellHook = ''
-            echo "cxgen dev shell"
+            echo "komatag dev shell"
             echo "  cargo build     – build the binary"
             echo "  cargo test      – run unit tests"
             echo "  cargo run -- --help"

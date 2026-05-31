@@ -268,21 +268,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
-name = "comic-xml-generator"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sevenz-rust",
- "thiserror 1.0.69",
- "zip",
-]
-
-[[package]]
 name = "constant_time_eq"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -812,6 +797,21 @@ checksum = "93f0862381daaec758576dcc22eb7bbf4d7efd67328553f3b45a412a51a3fb21"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "komatag"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sevenz-rust",
+ "thiserror 1.0.69",
+ "zip",
 ]
 
 [[package]]

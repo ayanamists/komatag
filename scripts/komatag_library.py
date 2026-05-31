@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive cxgen across a whole manga library.
+"""Drive komatag across a whole manga library.
 
 Two phases, kept separate on purpose so a human can review the risky middle step
 (matching each series to the correct Bangumi subject) before anything is written:
@@ -15,9 +15,9 @@ The map is plain JSON: open it, fix any `needs_review` entry's `bangumi_id`,
 then run `apply`. Nothing touches an archive until `apply --no-dry-run`.
 
 Usage:
-  cxgen_library.py resolve --root /data/manga --out series-map.json
-  cxgen_library.py apply   --root /data/manga --map series-map.json          # dry-run
-  cxgen_library.py apply   --root /data/manga --map series-map.json --no-dry-run
+  komatag_library.py resolve --root /data/manga --out series-map.json
+  komatag_library.py apply   --root /data/manga --map series-map.json          # dry-run
+  komatag_library.py apply   --root /data/manga --map series-map.json --no-dry-run
 """
 
 import argparse
@@ -30,13 +30,13 @@ import sys
 import time
 import zipfile
 
-# cxgen binary: env override, else the release build next to this repo.
-CXGEN = os.environ.get(
-    "CXGEN",
-    os.path.join(os.path.dirname(__file__), "..", "target", "release", "cxgen"),
+# komatag binary: env override, else the release build next to this repo.
+KOMATAG = os.environ.get(
+    "KOMATAG",
+    os.path.join(os.path.dirname(__file__), "..", "target", "release", "komatag"),
 )
 
-# A search result line printed by `cxgen search`:
+# A search result line printed by `komatag search`:
 #   [208146] 五等分の花嫁 / 五等分的新娘 (2017-10-17) [系列, 漫画]
 SEARCH_LINE = re.compile(r"^\[(\d+)\]\s+(.*)$")
 
@@ -79,12 +79,12 @@ def read_meta_json(series_dir):
         return None
 
 
-def run_cxgen(extra_args, retries=3):
-    """Run cxgen, retrying transient network resets. Returns (stdout, stderr, rc)."""
+def run_komatag(extra_args, retries=3):
+    """Run komatag, retrying transient network resets. Returns (stdout, stderr, rc)."""
     last = ("", "", 1)
     for attempt in range(retries):
         proc = subprocess.run(
-            [CXGEN, *extra_args],
+            [KOMATAG, *extra_args],
             capture_output=True,
             text=True,
         )
@@ -101,7 +101,7 @@ def search(title, token):
     args = ["search", title]
     if token:
         args += ["--token", token]
-    out, _, _ = run_cxgen(args)
+    out, _, _ = run_komatag(args)
     hits = []
     for line in out.splitlines():
         m = SEARCH_LINE.match(line.strip())
@@ -210,9 +210,9 @@ def pick_archives(series_dir):
 
 
 def inject_one(task, token):
-    """Inject ComicInfo.xml into one .cbz via `cxgen gen --inject`.
+    """Inject ComicInfo.xml into one .cbz via `komatag gen --inject`.
 
-    cxgen appends the entry in place (no full repack), so this is fast even for
+    komatag appends the entry in place (no full repack), so this is fast even for
     large archives; --force makes re-runs idempotent.
     """
     path, bid, vol = task["path"], task["bid"], task["vol"]
@@ -225,7 +225,7 @@ def inject_one(task, token):
     if isinstance(vol, int):
         gen += ["--volume", str(vol)]
     gen += ["--inject", "--force", path]
-    _, err, rc = run_cxgen(gen)
+    _, err, rc = run_komatag(gen)
     if rc == 0:
         return (path, True, None)
     return (path, False, (err.strip().splitlines() or [""])[-1])

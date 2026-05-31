@@ -18,5 +18,16 @@
 .DS_Store
 __MACOSX/
 
-# Temporary files written by cxgen during injection
-.*.cxgen_tmp
+# Temporary files written by komatag during injection
+.*.komatag_tmp
+
+# Local secrets & generated data (never commit)
+.envrc
+series-map.json
+# Scratch test files
+parse_test.rs
+parse_test2.rs
+test_parse.rs
+test_vol2.cbz
+*.cbz
+__pycache__/

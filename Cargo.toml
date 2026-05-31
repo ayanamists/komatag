@@ -1,12 +1,12 @@
 [package]
-name = "comic-xml-generator"
+name = "komatag"
 version = "0.1.0"
 edition = "2021"
 description = "CLI tool to generate ComicInfo.xml for comic archives (.zip, .cbz, .7z)"
 license = "MIT"
 
 [[bin]]
-name = "cxgen"
+name = "komatag"
 path = "src/main.rs"
 
 [dependencies]

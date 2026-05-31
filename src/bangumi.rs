@@ -23,9 +23,9 @@ use crate::comic_info::{ComicInfo, Manga, YesNo};
 
 const BASE_URL: &str = "https://api.bgm.tv";
 const USER_AGENT: &str = concat!(
-    "comic-xml-generator/",
+    "komatag/",
     env!("CARGO_PKG_VERSION"),
-    " (https://github.com/ayanamists/comic-xml-generator)"
+    " (https://github.com/ayanamists/komatag)"
 );
 
 // ---------------------------------------------------------------------------

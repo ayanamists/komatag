@@ -1,4 +1,4 @@
-# cxgen — Comic XML Generator
+# komatag — Bangumi-powered ComicInfo tagger
 
 A CLI tool that generates a `ComicInfo.xml` (v2.0 schema) for comic archives
 in `.zip`, `.cbz`, or `.7z` format.
@@ -35,19 +35,19 @@ The resulting XML conforms to the [ComicInfo v2.0 schema](comicinfo/schema/v2.0/
 
 ```sh
 # Print ComicInfo.xml to stdout (metadata inferred from filename)
-cxgen gen "My Series v02 #015 (2022) (Publisher).cbz"
+komatag gen "My Series v02 #015 (2022) (Publisher).cbz"
 
 # Inject directly into a CBZ archive
-cxgen gen --inject "My Series v02 #015 (2022) (Publisher).cbz"
+komatag gen --inject "My Series v02 #015 (2022) (Publisher).cbz"
 
 # Fetch rich metadata from Bangumi and inject
-cxgen gen --bangumi-id 12345 --inject "One Piece v01 (1997).cbz"
+komatag gen --bangumi-id 12345 --inject "One Piece v01 (1997).cbz"
 
 # Write to a sidecar file (useful for .7z archives)
-cxgen gen -o ComicInfo.xml "archive.7z"
+komatag gen -o ComicInfo.xml "archive.7z"
 
 # Search Bangumi for a subject ID (no archive needed)
-cxgen search "進撃の巨人"
+komatag search "進撃の巨人"
 ```
 
 ---
@@ -81,7 +81,7 @@ Requires a stable Rust toolchain (1.75+).
 
 ```sh
 cargo build --release
-# Binary: target/release/cxgen
+# Binary: target/release/komatag
 ```
 
 No native system libraries are required.  The HTTP client uses `rustls` (pure
@@ -97,42 +97,42 @@ Rust TLS), and both `zip` and `sevenz-rust` are pure-Rust implementations.
 # ── Output ──────────────────────────────────────────────────────────────────
 
 # Print XML to stdout
-cxgen gen archive.cbz
+komatag gen archive.cbz
 
 # Write to a file
-cxgen gen -o ComicInfo.xml archive.cbz
+komatag gen -o ComicInfo.xml archive.cbz
 
 # Inject into a ZIP/CBZ archive (creates a temp file, then replaces original)
-cxgen gen --inject archive.cbz
+komatag gen --inject archive.cbz
 
 # Inject and overwrite an existing ComicInfo.xml
-cxgen gen --inject --force archive.cbz
+komatag gen --inject --force archive.cbz
 
 # ── Metadata overrides ───────────────────────────────────────────────────────
 
-cxgen gen --series "One Piece" --number 1 --volume 1 \
+komatag gen --series "One Piece" --number 1 --volume 1 \
       --publisher "Shueisha" --language ja \
       --manga yes-rtl --inject archive.cbz
 
 # ── Bangumi ──────────────────────────────────────────────────────────────────
 
 # Search for a title (prints IDs, does not generate XML)
-cxgen search "ワンピース"
+komatag search "ワンピース"
 
 # Fetch by ID and merge with filename-parsed data
-cxgen gen --bangumi-id 950 --inject archive.cbz
+komatag gen --bangumi-id 950 --inject archive.cbz
 
-# Let cxgen pick the best match automatically (prefers the series head)
-cxgen gen --bangumi-auto --inject archive.cbz
+# Let komatag pick the best match automatically (prefers the series head)
+komatag gen --bangumi-auto --inject archive.cbz
 
 # Use an access token for higher rate limits / NSFW subjects
-BANGUMI_TOKEN=your_token cxgen gen --bangumi-id 950 --inject archive.cbz
+BANGUMI_TOKEN=your_token komatag gen --bangumi-id 950 --inject archive.cbz
 ```
 
 ### All options
 
 ```
-Usage: cxgen <COMMAND>
+Usage: komatag <COMMAND>
 
 Commands:
   gen     Generate ComicInfo.xml for an archive or a directory of archives
@@ -140,7 +140,7 @@ Commands:
 
 ────────────────────────────────────────────────────────────────────────────
 
-Usage: cxgen gen [OPTIONS] <FILE_OR_DIR>
+Usage: komatag gen [OPTIONS] <FILE_OR_DIR>
 
 Arguments:
   <FILE_OR_DIR>  Comic archive or directory of archives (.zip, .cbz, .7z)
@@ -184,7 +184,7 @@ Bangumi:
 
 ────────────────────────────────────────────────────────────────────────────
 
-Usage: cxgen search [OPTIONS] <QUERY>
+Usage: komatag search [OPTIONS] <QUERY>
 
 Arguments:
   <QUERY>  Title or keyword to search for
@@ -201,7 +201,7 @@ Options:
 ## Bangumi integration
 
 [Bangumi (bgm.tv)](https://bgm.tv) is a Chinese anime/manga/game database.
-`cxgen` can fetch structured metadata from its v0 API and map the fields to
+`komatag` can fetch structured metadata from its v0 API and map the fields to
 `ComicInfo.xml`.
 
 ### Field mapping
@@ -238,20 +238,20 @@ token out of your shell history) or the `--bangumi-token` flag.
 
 ```sh
 # 1. Find the Bangumi subject ID ([系列] marks the series head)
-cxgen search "进击的巨人"
+komatag search "进击的巨人"
 #   [8491] 進撃の巨人 / 进击的巨人 (2010-03-17) [系列, 漫画]
 #   [63683] 進撃の巨人 Before the fall / ... (2011-12-02) [漫画]
 #   ...
 
 # 2. Fetch and inject
-cxgen gen --bangumi-id 8491 --inject "Attack on Titan v01 (2009).cbz"
+komatag gen --bangumi-id 8491 --inject "Attack on Titan v01 (2009).cbz"
 ```
 
 ---
 
 ## Filename parsing
 
-When no Bangumi ID is provided, `cxgen` attempts to extract metadata directly
+When no Bangumi ID is provided, `komatag` attempts to extract metadata directly
 from the archive filename.  Recognised patterns include:
 
 | Filename | series | number | volume | year | publisher |
@@ -283,14 +283,14 @@ Key fields generated automatically:
 - **`PageCount`** — number of image files found in the archive.
 - **`Pages`** — one `<Page>` element per image; the first is marked
   `FrontCover`, the last `BackCover`, and the rest `Story`.
-- **`Notes`** — stamped with `Generated by cxgen vX.Y.Z from '<filename>'`.
+- **`Notes`** — stamped with `Generated by komatag vX.Y.Z from '<filename>'`.
 
 ---
 
 ## Project layout
 
 ```
-comic-xml-generator/
+komatag/
 ├── api/
 │   └── bangumi-openapi.json   Reference: Bangumi API v2026-01-22
 ├── comicinfo/                 Git submodule: ComicInfo schema & docs
