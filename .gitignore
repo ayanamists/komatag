@@ -22,7 +22,6 @@ __MACOSX/
 .*.komatag_tmp
 
 # Local secrets & generated data (never commit)
-.envrc
 series-map.json
 # Scratch test files
 parse_test.rs
