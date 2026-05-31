@@ -5,13 +5,15 @@
 //! - Checks whether a `ComicInfo.xml` is already present.
 //!
 //! # Writing (injection)
-//! - ZIP / CBZ: copies all entries into a temp file, appends `ComicInfo.xml`,
-//!   then atomically replaces the original.
+//! - ZIP / CBZ: by default `ComicInfo.xml` is *appended* in place — the
+//!   existing entries are left untouched, so injecting a ~2KB file into a
+//!   200MB archive is near-instant. Only when an old `ComicInfo.xml` must be
+//!   replaced (`--force`) do we fall back to a full copy-and-replace rewrite.
 //! - 7Z: not supported for in-place injection; callers should write the XML
 //!   alongside the archive or to stdout instead.
 
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -196,37 +198,68 @@ pub fn inspect(path: &Path) -> Result<ArchiveInfo> {
 
 /// Inject `xml_content` as `ComicInfo.xml` into a ZIP/CBZ archive.
 ///
-/// The implementation:
-/// 1. Opens the original archive.
-/// 2. Writes all existing entries (except any pre-existing `ComicInfo.xml`)
-///    into a temporary file in the same directory.
-/// 3. Appends the new `ComicInfo.xml`.
-/// 4. Atomically replaces the original file.
+/// Fast path (the default): when the archive has no `ComicInfo.xml` yet, the
+/// entry is *appended* in place via [`inject_zip_append`] — existing entries
+/// are not rewritten.
 ///
-/// The temporary file is removed on error to avoid leaving partial files.
+/// Slow path: when a `ComicInfo.xml` already exists it cannot be appended-over,
+/// so (with `force`) we fall back to [`inject_zip_rewrite`], which copies every
+/// entry into a temp file and atomically replaces the original. Without `force`
+/// this is an error.
 pub fn inject_zip(path: &Path, xml_content: &str, force: bool) -> Result<()> {
-    use zip::{write::SimpleFileOptions, ZipWriter};
-
-    // Check for existing ComicInfo.xml first
-    {
+    let has_comic_info = {
         let f = File::open(path)
             .with_context(|| format!("Cannot open '{}'", path.display()))?;
         let mut archive = zip::ZipArchive::new(f)?;
-        for i in 0..archive.len() {
-            let entry = archive.by_index(i)?;
-            if is_comic_info(entry.name()) {
-                if !force {
-                    bail!(
-                        "'{}' already contains ComicInfo.xml. Use --force to overwrite.",
-                        path.display()
-                    );
-                }
-                break;
-            }
-        }
-    }
+        (0..archive.len()).any(|i| {
+            archive
+                .by_index(i)
+                .map(|e| is_comic_info(e.name()))
+                .unwrap_or(false)
+        })
+    };
 
-    // Build temp file path alongside the original
+    if has_comic_info {
+        if !force {
+            bail!(
+                "'{}' already contains ComicInfo.xml. Use --force to overwrite.",
+                path.display()
+            );
+        }
+        inject_zip_rewrite(path, xml_content)
+    } else {
+        inject_zip_append(path, xml_content)
+    }
+}
+
+/// Append `ComicInfo.xml` to the end of an existing archive without rewriting
+/// the existing entries. Requires that no `ComicInfo.xml` is already present.
+fn inject_zip_append(path: &Path, xml_content: &str) -> Result<()> {
+    use zip::write::SimpleFileOptions;
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("Cannot open '{}' for appending", path.display()))?;
+
+    let mut zw = zip::ZipWriter::new_append(file)
+        .with_context(|| format!("Cannot open '{}' as an appendable ZIP", path.display()))?;
+
+    let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zw.start_file(COMIC_INFO_FILENAME, opts)?;
+    zw.write_all(xml_content.as_bytes())?;
+    zw.finish()
+        .with_context(|| format!("Cannot finalize '{}'", path.display()))?;
+
+    Ok(())
+}
+
+/// Replace a pre-existing `ComicInfo.xml` by copying all other entries into a
+/// temp file and atomically swapping it in. The temp file is removed on error.
+fn inject_zip_rewrite(path: &Path, xml_content: &str) -> Result<()> {
+    use zip::{write::SimpleFileOptions, ZipWriter};
+
     let tmp_path = tmp_path_for(path);
 
     let result = (|| -> Result<()> {
@@ -238,12 +271,11 @@ pub fn inject_zip(path: &Path, xml_content: &str, force: bool) -> Result<()> {
             .with_context(|| format!("Cannot create temp file '{}'", tmp_path.display()))?;
         let mut dst = ZipWriter::new(dst_file);
 
-        // Copy all existing entries, skipping old ComicInfo.xml
+        // Copy all existing entries, skipping the old ComicInfo.xml
         for i in 0..src_archive.len() {
             let mut entry = src_archive.by_index(i)?;
 
             if is_comic_info(entry.name()) {
-                // drop it; we'll add the new one below
                 continue;
             }
 
@@ -259,7 +291,6 @@ pub fn inject_zip(path: &Path, xml_content: &str, force: bool) -> Result<()> {
                 .with_context(|| format!("Cannot copy ZIP entry '{name}'"))?;
         }
 
-        // Append the new ComicInfo.xml (stored, no compression needed)
         let opts = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
         dst.start_file(COMIC_INFO_FILENAME, opts)?;
@@ -270,12 +301,10 @@ pub fn inject_zip(path: &Path, xml_content: &str, force: bool) -> Result<()> {
     })();
 
     if result.is_err() {
-        // Clean up temp file on failure
         let _ = fs::remove_file(&tmp_path);
         return result;
     }
 
-    // Atomically replace the original
     fs::rename(&tmp_path, path).with_context(|| {
         format!(
             "Cannot replace '{}' with temp file '{}'",

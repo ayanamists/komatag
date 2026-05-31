@@ -21,12 +21,14 @@ Usage:
 """
 
 import argparse
+import concurrent.futures as cf
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+import zipfile
 
 # cxgen binary: env override, else the release build next to this repo.
 CXGEN = os.environ.get(
@@ -39,11 +41,13 @@ CXGEN = os.environ.get(
 SEARCH_LINE = re.compile(r"^\[(\d+)\]\s+(.*)$")
 
 # Volume number inside an archive filename: `Wdfdxn_01.cbz`, `第01卷`, `Volume_01`.
+# `(?!\.?\d)` rejects the integer part of a decimal (e.g. "_1.5" / "_5.5"),
+# so half-volumes and extras don't masquerade as integer volumes.
 VOL_PATTERNS = [
-    re.compile(r"_(\d{1,4})\b"),
+    re.compile(r"_(\d{1,4})(?!\.?\d)"),
     re.compile(r"第\s*(\d{1,4})\s*[卷册]"),
-    re.compile(r"(?i)\bvol(?:ume)?\.?\s*(\d{1,4})\b"),
-    re.compile(r"(?i)\bv(\d{1,4})\b"),
+    re.compile(r"(?i)\bvol(?:ume)?\.?\s*(\d{1,4})(?!\.?\d)"),
+    re.compile(r"(?i)\bv(\d{1,4})(?!\.?\d)"),
 ]
 
 # Bracket tags that are not the title or the author (edition/quality markers).
@@ -183,62 +187,100 @@ def parse_volume(filename):
     return None
 
 
+def has_comicinfo(path):
+    """True if the .cbz already contains a ComicInfo.xml (central-dir read only)."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            return any(n.lower().endswith("comicinfo.xml") for n in z.namelist())
+    except (zipfile.BadZipFile, OSError):
+        return False
+
+
 def pick_archives(series_dir):
-    """One archive per volume; prefer .cbz over .7z when both exist."""
-    by_vol = {}
+    """Every .cbz in the directory, mapped to its parsed volume (or None).
+
+    Keyed by filename so distinct files that parse to the same volume (alternate
+    editions, half-volumes, bonus books in one folder) are all kept — never
+    silently deduplicated. Non-.cbz (.7z/.zip) are ignored."""
+    out = {}
     for fn in sorted(os.listdir(series_dir)):
-        ext = os.path.splitext(fn)[1].lower()
-        if ext not in (".cbz", ".zip", ".7z"):
-            continue
-        vol = parse_volume(fn)
-        key = vol if vol is not None else fn
-        cur = by_vol.get(key)
-        if cur is None or (cur.lower().endswith(".7z") and ext != ".7z"):
-            by_vol[key] = fn
-    return by_vol
+        if fn.lower().endswith(".cbz"):
+            out[fn] = parse_volume(fn)
+    return out
+
+
+def inject_one(task, token):
+    """Inject ComicInfo.xml into one .cbz via `cxgen gen --inject`.
+
+    cxgen appends the entry in place (no full repack), so this is fast even for
+    large archives; --force makes re-runs idempotent.
+    """
+    path, bid, vol = task["path"], task["bid"], task["vol"]
+    gen = ["gen"]
+    if bid:
+        gen += ["--bangumi-id", str(bid)]
+        if token:
+            gen += ["--bangumi-token", token]
+    gen += ["--manga", "yes-rtl", "--language", "zh-Hans"]
+    if isinstance(vol, int):
+        gen += ["--volume", str(vol)]
+    gen += ["--inject", "--force", path]
+    _, err, rc = run_cxgen(gen)
+    if rc == 0:
+        return (path, True, None)
+    return (path, False, (err.strip().splitlines() or [""])[-1])
 
 
 def cmd_apply(args):
     with open(args.map, encoding="utf-8") as fh:
         entries = json.load(fh)
 
-    injected = skipped = failed = 0
+    tasks = []
+    skipped_existing = 0
     for entry in entries:
+        if entry.get("drop"):
+            continue
         if entry.get("needs_review") and not args.include_review:
             print(f"  skip (needs review): {entry['title']}", file=sys.stderr)
             continue
-        bid = entry.get("bangumi_id")
-        if not bid:
-            continue
+        bid = entry.get("bangumi_id")  # may be None -> filename-only metadata
         series_dir = os.path.join(args.root, entry["dir"])
         if not os.path.isdir(series_dir):
             continue
-        vol_sort = lambda kv: (0, kv[0]) if isinstance(kv[0], int) else (1, str(kv[0]))
-        for vol, fn in sorted(pick_archives(series_dir).items(), key=vol_sort):
+        for fn, vol in sorted(pick_archives(series_dir).items()):
             path = os.path.join(series_dir, fn)
-            gen = ["gen", "--bangumi-id", str(bid), "--manga", "yes-rtl",
-                   "--language", "zh-Hans"]
-            if isinstance(vol, int):
-                gen += ["--volume", str(vol)]
-            if args.token:
-                gen += ["--bangumi-token", args.token]
-            if not path.lower().endswith(".7z"):
-                gen += ["--inject", "--force"]
-            gen.append(path)
-            if args.dry_run:
-                print("  DRY  " + " ".join(gen[:-1]) + f" {fn!r}")
+            # Already-injected files are skipped by default: re-injecting would
+            # hit the slow rewrite path. Pass --reinject to force them.
+            if not args.reinject and has_comicinfo(path):
+                skipped_existing += 1
                 continue
-            _, err, rc = run_cxgen(gen)
-            if rc == 0:
+            tasks.append({"path": path, "bid": bid, "vol": vol})
+
+    if skipped_existing:
+        print(f"  {skipped_existing} already have ComicInfo (skipped; --reinject to redo)",
+              file=sys.stderr)
+    print(f"  {len(tasks)} .cbz to inject, jobs={args.jobs}", file=sys.stderr)
+    if args.dry_run:
+        for t in tasks[:5]:
+            print(f"  DRY  bangumi-id={t['bid']} vol={t['vol']}  {os.path.basename(t['path'])!r}")
+        print(f"\n(dry-run) would inject={len(tasks)}", file=sys.stderr)
+        return
+
+    injected = failed = 0
+    with cf.ThreadPoolExecutor(max_workers=args.jobs) as ex:
+        futures = [ex.submit(inject_one, t, args.token) for t in tasks]
+        for i, fut in enumerate(cf.as_completed(futures), 1):
+            _, ok, errmsg = fut.result()
+            if ok:
                 injected += 1
             else:
                 failed += 1
-                print(f"  FAIL {fn}: {err.strip().splitlines()[-1:]}", file=sys.stderr)
-    print(
-        f"\n{'(dry-run) ' if args.dry_run else ''}injected={injected} "
-        f"failed={failed}",
-        file=sys.stderr,
-    )
+                print(f"  FAIL {errmsg}", file=sys.stderr)
+            if i % 100 == 0 or i == len(tasks):
+                print(f"  …{i}/{len(tasks)} (ok={injected} fail={failed})",
+                      file=sys.stderr)
+
+    print(f"\ninjected={injected} failed={failed}", file=sys.stderr)
 
 
 def main():
@@ -262,6 +304,10 @@ def main():
                    help="actually inject (default is a dry run)")
     a.add_argument("--include-review", action="store_true",
                    help="also process entries still flagged needs_review")
+    a.add_argument("--jobs", type=int, default=6,
+                   help="parallel injection workers (default 6)")
+    a.add_argument("--reinject", action="store_true",
+                   help="also re-process .cbz that already contain ComicInfo.xml")
     a.set_defaults(func=cmd_apply, dry_run=True)
 
     args = p.parse_args()
